@@ -17,6 +17,30 @@ async function fetchBTCPriceData(days = 1) {
   }
 }
 
+async function fetchBTCOhlcData(days = 1) {
+  try {
+    const response = await fetch(
+      `${COINGECKO_API}/coins/bitcoin/ohlc?vs_currency=jpy&days=${days}`,
+    );
+    const data = await response.json();
+
+    if (!Array.isArray(data)) {
+      return [];
+    }
+
+    return data.map(([timestamp, open, high, low, close]) => ({
+      time: Math.floor(timestamp / 1000),
+      open,
+      high,
+      low,
+      close,
+    }));
+  } catch (error) {
+    console.error("OHLC data fetch error:", error);
+    return [];
+  }
+}
+
 // 左サイドメニューコンポーネント
 function SideMenu({ activeMenu, setActiveMenu }) {
   const menuItems = [
@@ -152,98 +176,167 @@ function RecentTrades() {
 }
 
 // チャートコンポーネント
-function PriceChart({ interval }) {
-  const chartRef = useRef(null);
+function PriceChart({ interval, chartType = "line" }) {
+  const chartRootRef = useRef(null);
   const chartInstance = useRef(null);
   const [currentPrice, setCurrentPrice] = useState(null);
   const [priceChange, setPriceChange] = useState(null);
 
   useEffect(() => {
+    let mounted = true;
+    let detachResize = () => {};
+    let loading = false;
     const daysMap = { "1H": 1 / 24, "1D": 1, "1W": 7, "1M": 30 };
+    const refreshIntervalMs = 5000;
 
     const loadChartData = async () => {
-      const days = daysMap[interval] || 1;
-      const priceData = await fetchBTCPriceData(days);
-
-      if (priceData.length > 0) {
-        const latestPrice = priceData[priceData.length - 1][1];
-        const oldPrice = priceData[0][1];
-        setCurrentPrice(latestPrice);
-        setPriceChange(
-          (((latestPrice - oldPrice) / oldPrice) * 100).toFixed(2),
-        );
+      if (!mounted || loading) {
+        return;
       }
 
-      if (chartRef.current) {
-        if (chartInstance.current) {
-          chartInstance.current.destroy();
+      loading = true;
+      try {
+        const days = daysMap[interval] || 1;
+        const lw = window.LightweightCharts;
+
+        if (!chartRootRef.current || !lw || !lw.createChart) {
+          console.warn("Lightweight Charts is not available");
+          return;
         }
 
-        const ctx = chartRef.current.getContext("2d");
-        chartInstance.current = new Chart(ctx, {
-          type: "line",
-          data: {
-            labels: priceData.map((d) => new Date(d[0])),
-            datasets: [
-              {
-                label: "BTC/JPY",
-                data: priceData.map((d) => d[1]),
-                borderColor: "#4a9eff",
-                backgroundColor: "rgba(74, 158, 255, 0.1)",
-                borderWidth: 2,
-                fill: true,
-                tension: 0.4,
-                pointRadius: 0,
-                pointHoverRadius: 4,
-              },
-            ],
+        if (chartInstance.current) {
+          chartInstance.current.remove();
+          chartInstance.current = null;
+        }
+
+        const chart = lw.createChart(chartRootRef.current, {
+          layout: {
+            background: { color: "#1a1b1e" },
+            textColor: "#888",
           },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-              legend: { display: false },
-              tooltip: {
-                mode: "index",
-                intersect: false,
-                backgroundColor: "#0f1012",
-                titleColor: "#e8e8e8",
-                bodyColor: "#e8e8e8",
-                borderColor: "#3a3b3e",
-                borderWidth: 1,
-              },
-            },
-            scales: {
-              x: {
-                type: "time",
-                time: { unit: days <= 1 ? "hour" : "day" },
-                grid: { color: "#2a2b2e" },
-                ticks: { color: "#888" },
-              },
-              y: {
-                position: "right",
-                grid: { color: "#2a2b2e" },
-                ticks: {
-                  color: "#888",
-                  callback: (value) => value.toLocaleString("ja-JP"),
-                },
-              },
-            },
-            interaction: {
-              mode: "nearest",
-              axis: "x",
-              intersect: false,
-            },
+          grid: {
+            vertLines: { color: "#2a2b2e" },
+            horzLines: { color: "#2a2b2e" },
+          },
+          rightPriceScale: {
+            borderColor: "#2a2b2e",
+          },
+          timeScale: {
+            borderColor: "#2a2b2e",
+            timeVisible: true,
+            secondsVisible: false,
+          },
+          crosshair: {
+            vertLine: { color: "#3a3b3e" },
+            horzLine: { color: "#3a3b3e" },
           },
         });
+
+        chartInstance.current = chart;
+
+        const resize = () => {
+          if (!chartRootRef.current || !chartInstance.current) {
+            return;
+          }
+
+          chartInstance.current.applyOptions({
+            width: chartRootRef.current.clientWidth,
+            height: chartRootRef.current.clientHeight,
+          });
+        };
+
+        resize();
+        window.addEventListener("resize", resize);
+        detachResize = () => window.removeEventListener("resize", resize);
+
+        const priceData = await fetchBTCPriceData(days);
+
+        if (!mounted || !chartInstance.current) {
+          return;
+        }
+
+        if (priceData.length > 0) {
+          const latestPrice = priceData[priceData.length - 1][1];
+          const oldPrice = priceData[0][1];
+          setCurrentPrice(latestPrice);
+          setPriceChange(
+            (((latestPrice - oldPrice) / oldPrice) * 100).toFixed(2),
+          );
+        }
+
+        if (chartType === "candle") {
+          let ohlcData = await fetchBTCOhlcData(days);
+
+          if (ohlcData.length === 0 && priceData.length > 0) {
+            ohlcData = priceData.map(([timestamp, price]) => ({
+              time: Math.floor(timestamp / 1000),
+              open: price,
+              high: price,
+              low: price,
+              close: price,
+            }));
+          }
+
+          if (ohlcData.length > 0) {
+            const candleSeries = chart.addCandlestickSeries({
+              upColor: "#26a69a",
+              downColor: "#ef5350",
+              borderVisible: false,
+              wickUpColor: "#26a69a",
+              wickDownColor: "#ef5350",
+            });
+            candleSeries.setData(ohlcData);
+          }
+        } else {
+          const lineData = priceData.map(([timestamp, price]) => ({
+            time: Math.floor(timestamp / 1000),
+            value: price,
+          }));
+
+          if (lineData.length > 0) {
+            const lineSeries = chart.addAreaSeries({
+              lineColor: "#4a9eff",
+              topColor: "rgba(74, 158, 255, 0.25)",
+              bottomColor: "rgba(74, 158, 255, 0.05)",
+              lineWidth: 2,
+            });
+            lineSeries.setData(lineData);
+          }
+        }
+
+        chart.timeScale().fitContent();
+      } finally {
+        loading = false;
       }
     };
 
     loadChartData();
-    return () => {
-      if (chartInstance.current) chartInstance.current.destroy();
+
+    const timerId = setInterval(() => {
+      if (document.visibilityState === "visible") {
+        loadChartData();
+      }
+    }, refreshIntervalMs);
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        loadChartData();
+      }
     };
-  }, [interval]);
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      mounted = false;
+      detachResize();
+      clearInterval(timerId);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      if (chartInstance.current) {
+        chartInstance.current.remove();
+        chartInstance.current = null;
+      }
+    };
+  }, [interval, chartType]);
 
   return (
     <div className="chart-section-full">
@@ -270,7 +363,7 @@ function PriceChart({ interval }) {
         </div>
       </div>
       <div className="chart-container">
-        <canvas ref={chartRef}></canvas>
+        <div ref={chartRootRef} className="tv-chart-root"></div>
       </div>
     </div>
   );
@@ -355,6 +448,7 @@ function App() {
   const [deposits, setDeposits] = useState([]);
   const [withdrawals, setWithdrawals] = useState([]);
   const [chartInterval, setChartInterval] = useState("1D");
+  const [chartType, setChartType] = useState("line");
 
   useEffect(() => {
     fetchBalance();
@@ -392,6 +486,60 @@ function App() {
     }
   };
 
+  const btcJpy = (balance.BTC || 0) * 15000000;
+  const ethJpy = (balance.ETH || 0) * 500000;
+  const totalJpy = btcJpy + ethJpy;
+  const assetColors = {
+    JPY: "#26a69a",
+    BTC: "#f7931a",
+    ETH: "#627eea",
+  };
+
+  const donutAssets = [
+    { currency: "BTC", value: btcJpy, color: assetColors.BTC },
+    { currency: "ETH", value: ethJpy, color: assetColors.ETH },
+  ].filter((asset) => asset.value > 0);
+
+  const donutGradient =
+    totalJpy > 0 && donutAssets.length > 0
+      ? (() => {
+          let current = 0;
+          return donutAssets
+            .map((asset) => {
+              const start = current;
+              current += (asset.value / totalJpy) * 100;
+              return `${asset.color} ${start}% ${current}%`;
+            })
+            .join(", ");
+        })()
+      : "#3a3b3e 0% 100%";
+
+  const assetRows = [
+    {
+      currency: "JPY",
+      amountRaw: 0,
+      balanceText: "0",
+      convertedText: "¥ 0",
+      color: assetColors.JPY,
+    },
+    {
+      currency: "BTC",
+      amountRaw: balance.BTC || 0,
+      balanceText: (balance.BTC || 0).toFixed(8),
+      convertedText: `¥ ${btcJpy.toLocaleString("ja-JP")}`,
+      color: assetColors.BTC,
+    },
+    {
+      currency: "ETH",
+      amountRaw: balance.ETH || 0,
+      balanceText: (balance.ETH || 0).toFixed(8),
+      convertedText: `¥ ${ethJpy.toLocaleString("ja-JP")}`,
+      color: assetColors.ETH,
+    },
+  ].filter((row) => row.currency === "JPY" || row.amountRaw > 0);
+
+  const fetchedAt = new Date().toLocaleString("ja-JP");
+
   return (
     <div className="app-container-new">
       <div className="top-header">
@@ -406,9 +554,7 @@ function App() {
           <div className="info-item">
             <span className="info-label">純資産額</span>
             <span className="info-value">
-              {(balance.BTC * 15000000 + balance.ETH * 500000).toLocaleString(
-                "ja-JP",
-              )}{" "}
+              {totalJpy.toLocaleString("ja-JP")} {" "}
               JPY
             </span>
           </div>
@@ -429,17 +575,33 @@ function App() {
             <div className="chart-view">
               <div className="chart-main">
                 <div className="chart-controls">
-                  {["1H", "1D", "1W", "1M"].map((interval) => (
+                  <div className="chart-control-group">
+                    {["1H", "1D", "1W", "1M"].map((interval) => (
+                      <button
+                        key={interval}
+                        className={`interval-btn ${chartInterval === interval ? "active" : ""}`}
+                        onClick={() => setChartInterval(interval)}
+                      >
+                        {interval}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="chart-control-group">
                     <button
-                      key={interval}
-                      className={`interval-btn ${chartInterval === interval ? "active" : ""}`}
-                      onClick={() => setChartInterval(interval)}
+                      className={`chart-type-btn ${chartType === "line" ? "active" : ""}`}
+                      onClick={() => setChartType("line")}
                     >
-                      {interval}
+                      チャート表示
                     </button>
-                  ))}
+                    <button
+                      className={`chart-type-btn ${chartType === "candle" ? "active" : ""}`}
+                      onClick={() => setChartType("candle")}
+                    >
+                      足表示
+                    </button>
+                  </div>
                 </div>
-                <PriceChart interval={chartInterval} />
+                <PriceChart interval={chartInterval} chartType={chartType} />
               </div>
               <div className="chart-sidebar">
                 <OrderBook />
@@ -451,7 +613,7 @@ function App() {
           {activeMenu === "trade" && (
             <div className="trade-view">
               <div className="trade-main">
-                <PriceChart interval={chartInterval} />
+                <PriceChart interval={chartInterval} chartType={chartType} />
               </div>
               <TradingPanel balance={balance} />
             </div>
@@ -459,33 +621,45 @@ function App() {
 
           {activeMenu === "assets" && (
             <div className="assets-view">
-              <div className="assets-summary">
-                <div className="summary-card">
-                  <h3>総資産評価額</h3>
-                  <div className="big-amount">
-                    {(
-                      balance.BTC * 15000000 +
-                      balance.ETH * 500000
-                    ).toLocaleString("ja-JP")}{" "}
-                    JPY
+              <div className="assets-donut-panel">
+                <div
+                  className="assets-donut"
+                  style={{ "--assets-donut-gradient": donutGradient }}
+                >
+                  <div className="assets-donut-center">
+                    <div className="donut-title">合計残高</div>
+                    <div className="donut-amount">
+                      ¥{Math.round(totalJpy).toLocaleString("ja-JP")}
+                    </div>
                   </div>
                 </div>
-                <div className="summary-card">
-                  <h3>BTC 保有量</h3>
-                  <div className="big-amount">{balance.BTC.toFixed(8)} BTC</div>
-                  <div className="sub-amount">
-                    {" "}
-                    {(balance.BTC * 15000000).toLocaleString("ja-JP")} JPY
-                  </div>
+              </div>
+
+              <div className="assets-table-wrap">
+                <div className="assets-table-header-row">
+                  <div>暗号資産/通貨</div>
+                  <div>口座残高</div>
+                  <div>円換算額</div>
                 </div>
-                <div className="summary-card">
-                  <h3>ETH 保有量</h3>
-                  <div className="big-amount">{balance.ETH.toFixed(8)} ETH</div>
-                  <div className="sub-amount">
-                    {" "}
-                    {(balance.ETH * 500000).toLocaleString("ja-JP")} JPY
-                  </div>
+
+                <div className="assets-table-body">
+                  {assetRows.map((row) => (
+                    <div
+                      key={row.currency}
+                      className="assets-table-row"
+                      style={{ "--asset-color": row.color }}
+                    >
+                      <div className="currency-col">
+                        <span className="currency-dot"></span>
+                        <span className="currency-label">{row.currency}</span>
+                      </div>
+                      <div className="balance-col">{row.balanceText}</div>
+                      <div className="yen-col">{row.convertedText}</div>
+                    </div>
+                  ))}
                 </div>
+
+                <div className="assets-table-fetched">{fetchedAt} 取得</div>
               </div>
             </div>
           )}

@@ -33,7 +33,7 @@ class TestFrontendDisplay:
         assert response.ok, f"ページ読み込み失敗: ステータス {response.status}"
         
         # タイトルが正しいことを確認
-        expect(page).to_have_title("SBI VC Trade デモサイト - テスト設計演習用")
+        expect(page).to_have_title("暗号資産取引デモサイト - テスト設計演習用")
     
     def test_main_elements_visible(self, page: Page):
         """主要な要素が表示されているかテスト"""
@@ -46,56 +46,83 @@ class TestFrontendDisplay:
         # タイトルが表示されているか
         title = page.locator(".header-title")
         expect(title).to_be_visible()
-        expect(title).to_contain_text("SBI VC Trade")
+        expect(title).to_contain_text("暗号資産取引デモサイト")
         
-        # タブが表示されているか
-        tabs = page.locator(".tabs")
-        expect(tabs).to_be_visible()
+        # 価格ティッカーが表示されているか
+        ticker = page.locator(".price-ticker")
+        expect(ticker).to_be_visible()
         
-        # 3つのタブボタンが存在するか
-        tab_buttons = page.locator(".tab")
-        expect(tab_buttons).to_have_count(3)
-        
-        # サイドバーが表示されているか
-        sidebar = page.locator(".sidebar")
-        expect(sidebar).to_be_visible()
+        # サイドメニューが表示されているか
+        side_menu = page.locator(".side-menu")
+        expect(side_menu).to_be_visible()
+
+        # メニュー項目が存在するか
+        menu_items = page.locator(".menu-item")
+        expect(menu_items).to_have_count(6)
     
     def test_balance_display(self, page: Page):
         """残高が表示されているかテスト"""
         page.goto("http://localhost:5000")
+
+        # 資産状況メニューへ移動
+        page.locator(".menu-item", has_text="資産状況").click()
         
-        # 残高カードが表示されているか
-        balance_cards = page.locator(".balance-card")
-        expect(balance_cards).to_have_count(2)
+        # 合計残高ドーナツが表示されているか
+        donut = page.locator(".assets-donut")
+        expect(donut).to_be_visible()
         
-        # BTC残高が表示されているか
-        btc_balance = balance_cards.nth(0)
-        expect(btc_balance).to_contain_text("BTC 残高")
+        # テーブルヘッダーが表示されているか
+        table_header = page.locator(".assets-table-header-row")
+        expect(table_header).to_be_visible()
         
-        # ETH残高が表示されているか
-        eth_balance = balance_cards.nth(1)
-        expect(eth_balance).to_contain_text("ETH 残高")
+        # JPY行が表示されているか
+        jpy_row = page.locator(".assets-table-row", has_text="JPY")
+        expect(jpy_row).to_be_visible()
     
     def test_tab_switching(self, page: Page):
         """タブ切り替えが動作するかテスト"""
         page.goto("http://localhost:5000")
         
-        # 各タブをクリックして切り替え
-        chart_tab = page.locator(".tab", has_text="チャート")
-        deposit_tab = page.locator(".tab", has_text="入金")
-        withdraw_tab = page.locator(".tab", has_text="出金")
+        # 各メニューをクリックして切り替え
+        chart_menu = page.locator(".menu-item", has_text="チャート")
+        deposit_menu = page.locator(".menu-item", has_text="入金")
+        withdraw_menu = page.locator(".menu-item", has_text="出金")
         
-        # チャートタブをクリック
-        chart_tab.click()
-        expect(chart_tab).to_have_class("tab active")
+        # チャートメニューをクリック
+        chart_menu.click()
+        expect(chart_menu).to_have_class("menu-item active")
         
-        # 入金タブをクリック
-        deposit_tab.click()
-        expect(deposit_tab).to_have_class("tab active")
+        # 入金メニューをクリック
+        deposit_menu.click()
+        expect(deposit_menu).to_have_class("menu-item active")
         
-        # 出金タブをクリック
-        withdraw_tab.click()
-        expect(withdraw_tab).to_have_class("tab active")
+        # 出金メニューをクリック
+        withdraw_menu.click()
+        expect(withdraw_menu).to_have_class("menu-item active")
+
+    def test_chart_interval_1w_1m_visible(self, page: Page):
+        """1W/1Mボタン押下時にチャートが表示されるかテスト"""
+        page.goto("http://localhost:5000")
+
+        chart_menu = page.locator(".menu-item", has_text="チャート")
+        chart_menu.click()
+
+        chart_root = page.locator(".tv-chart-root")
+        expect(chart_root).to_be_visible()
+
+        interval_1w = page.locator(".interval-btn", has_text="1W")
+        interval_1w.click()
+        expect(interval_1w).to_have_class("interval-btn active")
+        expect(chart_root).to_be_visible()
+
+        interval_1m = page.locator(".interval-btn", has_text="1M")
+        interval_1m.click()
+        expect(interval_1m).to_have_class("interval-btn active")
+        expect(chart_root).to_be_visible()
+
+        # Lightweight Chartsの描画キャンバスが存在すること
+        canvas = page.locator(".tv-chart-root canvas").first
+        expect(canvas).to_be_visible()
 
 
 class TestConsoleErrors:
@@ -121,7 +148,7 @@ class TestConsoleErrors:
         page.goto("http://localhost:5000")
         
         # Reactアプリがレンダリングされるまで少し待つ
-        page.wait_for_selector(".app-container", timeout=5000)
+        page.wait_for_selector(".app-container-new", timeout=5000)
         
         # エラーログを確認
         if errors:
@@ -174,15 +201,23 @@ class TestConsoleErrors:
         # ページを読み込み
         page.goto("http://localhost:5000")
         
-        # チャートタブをクリック
-        chart_tab = page.locator(".tab", has_text="チャート")
+        # チャートメニューをクリック
+        chart_tab = page.locator(".menu-item", has_text="チャート")
         chart_tab.click()
         
         # チャートがレンダリングされるまで待つ
         page.wait_for_timeout(3000)
         
-        # エラーがないことを確認（CoinGecko APIのレート制限エラーは除外）
-        critical_errors = [e for e in errors if 'chart data fetch error' not in e.lower()]
+        # エラーがないことを確認（外部API由来の既知エラーは除外）
+        def is_ignorable_external_error(message: str) -> bool:
+            lower = message.lower()
+            return (
+                "chart data fetch error" in lower
+                or "coingecko.com" in lower
+                or ("failed to load resource" in lower and "err_failed" in lower)
+            )
+
+        critical_errors = [e for e in errors if not is_ignorable_external_error(e)]
         
         if critical_errors:
             print("\n⚠️  チャートタブでコンソールエラーが検出されました:")
