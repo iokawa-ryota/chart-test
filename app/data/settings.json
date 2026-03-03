@@ -1,0 +1,8 @@
+{
+  "mock_btc_price": 15000000,
+  "fee_rate": 0.001,
+  "min_order_amount": 0.0001,
+  "usdjpy_rate": 150,
+  "price_limit_percent": 10,
+  "maintenance_mode": false
+}

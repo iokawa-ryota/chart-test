@@ -3,44 +3,272 @@ from flask_cors import CORS
 import time
 import random
 from datetime import datetime
+import json
+import os
+import hashlib
+from functools import wraps
 
 app = Flask(__name__, static_folder='static')
 CORS(app)
 
-# モックデータ
-mock_balance = {
-    'BTC': 1.5,
-    'ETH': 10.0,
-    'JPY': 5000000  # 500万円
-}
+# データファイルパス
+DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
+SETTINGS_FILE = os.path.join(DATA_DIR, 'settings.json')
+BALANCE_FILE = os.path.join(DATA_DIR, 'balance.json')
+ORDERS_FILE = os.path.join(DATA_DIR, 'orders.json')
+DEPOSITS_FILE = os.path.join(DATA_DIR, 'deposits.json')
+WITHDRAWALS_FILE = os.path.join(DATA_DIR, 'withdrawals.json')
 
-mock_deposit_history = [
-    {'id': 1, 'date': '2026-02-25 10:30', 'currency': 'BTC', 'amount': 0.5, 'status': '完了'},
-    {'id': 2, 'date': '2026-02-26 14:20', 'currency': 'ETH', 'amount': 5.0, 'status': '完了'},
-    {'id': 3, 'date': '2026-02-27 09:15', 'currency': 'BTC', 'amount': 1.0, 'status': '処理中'},
-]
+# 管理者パスワード（SHA256ハッシュ）
+ADMIN_PASSWORD_HASH = hashlib.sha256('admin'.encode()).hexdigest()
 
-mock_withdrawal_history = []
+# JSON読み書き関数
+def read_json(filepath, default=None):
+    """JSONファイルを読み込む"""
+    try:
+        if os.path.exists(filepath):
+            with open(filepath, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        return default
+    except Exception as e:
+        print(f"Error reading {filepath}: {e}")
+        return default
 
-# 注文関連のモックデータ
-mock_orders = []
-order_id_counter = 1
-CURRENT_BTC_PRICE = 15000000  # 1500万円（モック価格）
+def write_json(filepath, data):
+    """JSONファイルに書き込む"""
+    try:
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        print(f"Error writing {filepath}: {e}")
+        return False
+
+# データ読み込み
+def load_settings():
+    return read_json(SETTINGS_FILE, {
+        'mock_btc_price': 15000000,
+        'fee_rate': 0.001,
+        'min_order_amount': 0.0001,
+        'usdjpy_rate': 150,
+        'price_limit_percent': 10,
+        'maintenance_mode': False
+    })
+
+def load_balance():
+    return read_json(BALANCE_FILE, {'BTC': 1.5, 'ETH': 10.0, 'JPY': 5000000})
+
+def load_orders():
+    return read_json(ORDERS_FILE, [])
+
+def load_deposits():
+    return read_json(DEPOSITS_FILE, [])
+
+def load_withdrawals():
+    return read_json(WITHDRAWALS_FILE, [])
+
+# 管理者認証デコレーター
+def admin_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        auth_header = request.headers.get('Authorization')
+        
+        if not auth_header or not auth_header.startswith('Bearer '):
+            return jsonify({'success': False, 'error': '認証が必要です'}), 401
+        
+        token = auth_header.split(' ')[1]
+        
+        # 簡易的なトークン検証（本番環境ではJWTなどを使用）
+        if token != ADMIN_PASSWORD_HASH:
+            return jsonify({'success': False, 'error': '認証に失敗しました'}), 401
+        
+        return f(*args, **kwargs)
+    return decorated_function
+
+# 初期データ読み込み
+settings = load_settings()
+mock_balance = load_balance()
+mock_deposit_history = load_deposits()
+mock_withdrawal_history = load_withdrawals()
+mock_orders = load_orders()
+
+# グローバル変数
+order_id_counter = len(mock_orders) + 1
+CURRENT_BTC_PRICE = settings.get('mock_btc_price', 15000000)
 
 # 静的ファイルの配信
 @app.route('/')
 def index():
     return send_from_directory('static', 'index.html')
 
+@app.route('/admin')
+def admin_index():
+    return send_from_directory('static/admin', 'index.html')
+
 @app.route('/<path:path>')
 def static_files(path):
     return send_from_directory('static', path)
+
+# ===== 管理画面API =====
+
+# API: 管理者ログイン
+@app.route('/api/admin/login', methods=['POST'])
+def admin_login():
+    data = request.json
+    password = data.get('password', '')
+    
+    password_hash = hashlib.sha256(password.encode()).hexdigest()
+    
+    if password_hash == ADMIN_PASSWORD_HASH:
+        return jsonify({
+            'success': True,
+            'token': ADMIN_PASSWORD_HASH
+        })
+    else:
+        return jsonify({
+            'success': False,
+            'error': 'パスワードが正しくありません'
+        }), 401
+
+# API: 設定取得
+@app.route('/api/admin/settings', methods=['GET'])
+@admin_required
+def get_admin_settings():
+    settings = load_settings()
+    return jsonify({'success': True, 'data': settings})
+
+# API: 設定更新
+@app.route('/api/admin/settings', methods=['PUT'])
+@admin_required
+def update_admin_settings():
+    global settings, CURRENT_BTC_PRICE
+    
+    data = request.json
+    
+    if write_json(SETTINGS_FILE, data):
+        settings = data
+        CURRENT_BTC_PRICE = settings.get('mock_btc_price', 15000000)
+        return jsonify({'success': True, 'message': '設定を更新しました'})
+    else:
+        return jsonify({'success': False, 'error': '設定の保存に失敗しました'}), 500
+
+# API: 残高取得（管理画面用）
+@app.route('/api/admin/balance', methods=['GET'])
+@admin_required
+def get_admin_balance():
+    balance = load_balance()
+    return jsonify({'success': True, 'data': balance})
+
+# API: 残高更新
+@app.route('/api/admin/balance', methods=['PUT'])
+@admin_required
+def update_admin_balance():
+    global mock_balance
+    
+    data = request.json
+    
+    if write_json(BALANCE_FILE, data):
+        mock_balance = data
+        return jsonify({'success': True, 'message': '残高を更新しました'})
+    else:
+        return jsonify({'success': False, 'error': '残高の保存に失敗しました'}), 500
+
+# API: 注文一覧取得（管理画面用）
+@app.route('/api/admin/orders', methods=['GET'])
+@admin_required
+def get_admin_orders():
+    orders = load_orders()
+    return jsonify({'success': True, 'data': orders})
+
+# API: 注文手動約定
+@app.route('/api/admin/orders/<int:order_id>/fill', methods=['POST'])
+@admin_required
+def fill_order(order_id):
+    global mock_orders, mock_balance
+    
+    orders = load_orders()
+    order = next((o for o in orders if o.get('id') == order_id), None)
+    
+    if not order:
+        return jsonify({'success': False, 'error': '注文が見つかりません'}), 404
+    
+    if order.get('status') != 'pending':
+        return jsonify({'success': False, 'error': 'この注文は約定できません'}), 400
+    
+    # 約定処理
+    order['status'] = 'filled'
+    order['filled_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    # 残高更新
+    balance = load_balance()
+    if order.get('type') == 'buy':
+        balance['JPY'] -= (order['price'] * order['amount'])
+        balance['BTC'] = balance.get('BTC', 0) + order['amount']
+    else:
+        balance['BTC'] -= order['amount']
+        balance['JPY'] = balance.get('JPY', 0) + (order['price'] * order['amount'])
+    
+    write_json(ORDERS_FILE, orders)
+    write_json(BALANCE_FILE, balance)
+    
+    mock_orders = orders
+    mock_balance = balance
+    
+    return jsonify({'success': True, 'message': '注文を約定しました'})
+
+# API: 注文キャンセル（管理画面用）
+@app.route('/api/admin/orders/<int:order_id>/cancel', methods=['POST'])
+@admin_required
+def admin_cancel_order(order_id):
+    global mock_orders
+    
+    orders = load_orders()
+    order = next((o for o in orders if o.get('id') == order_id), None)
+    
+    if not order:
+        return jsonify({'success': False, 'error': '注文が見つかりません'}), 404
+    
+    if order.get('status') != 'pending':
+        return jsonify({'success': False, 'error': 'この注文はキャンセルできません'}), 400
+    
+    order['status'] = 'canceled'
+    order['canceled_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    write_json(ORDERS_FILE, orders)
+    mock_orders = orders
+    
+    return jsonify({'success': True, 'message': '注文をキャンセルしました'})
+
+# API: 統計情報取得
+@app.route('/api/admin/stats', methods=['GET'])
+@admin_required
+def get_admin_stats():
+    orders = load_orders()
+    settings = load_settings()
+    
+    stats = {
+        'totalOrders': len(orders),
+        'completedOrders': len([o for o in orders if o.get('status') == 'filled']),
+        'pendingOrders': len([o for o in orders if o.get('status') == 'pending']),
+        'canceledOrders': len([o for o in orders if o.get('status') in ['canceled', 'cancelled']]),
+        'btcPrice': settings.get('mock_btc_price', 15000000),
+        'feeRate': settings.get('fee_rate', 0.001),
+        'minOrderAmount': settings.get('min_order_amount', 0.0001),
+        'usdJpyRate': settings.get('usdjpy_rate', 150)
+    }
+    
+    return jsonify({'success': True, 'data': stats})
+
+# ===== フロントエンド用API =====
+
 
 # API: 残高取得
 @app.route('/api/balance', methods=['GET'])
 def get_balance():
     time.sleep(0.3)  # レスポンス遅延を模擬
-    return jsonify(mock_balance)
+    balance = load_balance()
+    return jsonify(balance)
 
 # API: 入金履歴取得
 @app.route('/api/deposits', methods=['GET'])
@@ -136,7 +364,7 @@ def get_current_price():
 # API: 注文作成
 @app.route('/api/orders', methods=['POST'])
 def create_order():
-    global order_id_counter
+    global order_id_counter, mock_orders, mock_balance
     data = request.json
     
     time.sleep(0.5)  # 処理遅延
@@ -164,8 +392,10 @@ def create_order():
     if amount_float <= 0:
         return jsonify({'error': '数量は0より大きい値を入力してください'}), 400
     
-    # 最小数量チェック
-    MIN_ORDER_AMOUNT = 0.0001
+    # 設定から最小数量を取得
+    settings = load_settings()
+    MIN_ORDER_AMOUNT = settings.get('min_order_amount', 0.0001)
+    
     if amount_float < MIN_ORDER_AMOUNT:
         return jsonify({'error': f'最小注文数量は {MIN_ORDER_AMOUNT} BTC です'}), 400
     
@@ -182,30 +412,36 @@ def create_order():
         if price_float <= 0:
             return jsonify({'error': '価格は0より大きい値を入力してください'}), 400
         
-        # 価格範囲チェック（現在価格の±10%）
-        min_price = CURRENT_BTC_PRICE * 0.9
-        max_price = CURRENT_BTC_PRICE * 1.1
+        # 価格範囲チェック
+        price_limit = settings.get('price_limit_percent', 10) / 100
+        min_price = CURRENT_BTC_PRICE * (1 - price_limit)
+        max_price = CURRENT_BTC_PRICE * (1 + price_limit)
+        
         if price_float < min_price or price_float > max_price:
-            return jsonify({'error': f'価格は現在価格の±10%以内（{int(min_price):,}円〜{int(max_price):,}円）で指定してください'}), 400
+            return jsonify({'error': f'価格は現在価格の±{settings.get("price_limit_percent", 10)}%以内（{int(min_price):,}円〜{int(max_price):,}円）で指定してください'}), 400
         
         execution_price = price_float
     else:
         # 成行注文の場合は現在価格で約定
         execution_price = CURRENT_BTC_PRICE
     
+    # 残高取得
+    balance = load_balance()
+    fee_rate = settings.get('fee_rate', 0.001)
+    
     # 残高チェック
     if order_side == 'buy':
         # 買い注文：JPY残高が必要
         required_jpy = execution_price * amount_float
-        fee = required_jpy * 0.001  # 0.1%手数料
+        fee = required_jpy * fee_rate
         total_required = required_jpy + fee
         
-        if total_required > mock_balance['JPY']:
-            return jsonify({'error': f'JPY残高が不足しています（必要: {int(total_required):,}円、残高: {int(mock_balance["JPY"]):,}円）'}), 400
+        if total_required > balance['JPY']:
+            return jsonify({'error': f'JPY残高が不足しています（必要: {int(total_required):,}円、残高: {int(balance["JPY"]):,}円）'}), 400
     else:
         # 売り注文：BTC残高が必要
-        if amount_float > mock_balance['BTC']:
-            return jsonify({'error': f'BTC残高が不足しています（必要: {amount_float}BTC、残高: {mock_balance["BTC"]}BTC）'}), 400
+        if amount_float > balance['BTC']:
+            return jsonify({'error': f'BTC残高が不足しています（必要: {amount_float}BTC、残高: {balance["BTC"]}BTC）'}), 400
     
     # 注文作成
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -216,25 +452,36 @@ def create_order():
         'id': order_id,
         'side': order_side,
         'type': order_type,
+        'pair': 'BTC/JPY',
         'amount': amount_float,
         'price': execution_price,
         'total': execution_price * amount_float,
-        'fee': execution_price * amount_float * 0.001,
-        'status': 'filled' if order_type == 'market' else 'open',  # 成行は即約定
-        'created_at': now,
+        'fee': execution_price * amount_float * fee_rate,
+        'status': 'filled' if order_type == 'market' else 'pending',  # 成行は即約定
+        'timestamp': now,
         'filled_at': now if order_type == 'market' else None
     }
     
-    mock_orders.append(new_order)
+    orders = load_orders()
+    orders.append(new_order)
     
     # 成行注文の場合は即座に残高を更新
     if order_type == 'market':
         if order_side == 'buy':
-            mock_balance['JPY'] -= (new_order['total'] + new_order['fee'])
-            mock_balance['BTC'] += amount_float
+            balance['JPY'] -= (new_order['total'] + new_order['fee'])
+            balance['BTC'] += amount_float
         else:
-            mock_balance['BTC'] -= amount_float
-            mock_balance['JPY'] += (new_order['total'] - new_order['fee'])
+            balance['BTC'] -= amount_float
+            balance['JPY'] += (new_order['total'] - new_order['fee'])
+        
+        write_json(BALANCE_FILE, balance)
+    
+    # 注文をファイルに保存
+    write_json(ORDERS_FILE, orders)
+    
+    # メモリ上のデータも更新
+    mock_orders = orders
+    mock_balance = balance
     
     return jsonify({
         'success': True,
@@ -245,32 +492,40 @@ def create_order():
 # API: 注文一覧取得
 @app.route('/api/orders', methods=['GET'])
 def get_orders():
-    status = request.args.get('status')  # 'open', 'filled', 'all'
+    status = request.args.get('status')  # 'pending', 'filled', 'all'
     
-    if status == 'open':
-        filtered_orders = [o for o in mock_orders if o['status'] == 'open']
+    orders = load_orders()
+    
+    if status == 'pending':
+        filtered_orders = [o for o in orders if o.get('status') == 'pending']
     elif status == 'filled':
-        filtered_orders = [o for o in mock_orders if o['status'] == 'filled']
+        filtered_orders = [o for o in orders if o.get('status') == 'filled']
     else:
-        filtered_orders = mock_orders
+        filtered_orders = orders
     
     return jsonify(filtered_orders)
 
 # API: 注文キャンセル
 @app.route('/api/orders/<int:order_id>', methods=['DELETE'])
 def cancel_order(order_id):
+    global mock_orders
+    
     time.sleep(0.3)
     
-    order = next((o for o in mock_orders if o['id'] == order_id), None)
+    orders = load_orders()
+    order = next((o for o in orders if o.get('id') == order_id), None)
     
     if not order:
         return jsonify({'error': '注文が見つかりません'}), 404
     
-    if order['status'] != 'open':
+    if order.get('status') not in ['open', 'pending']:
         return jsonify({'error': 'この注文はキャンセルできません'}), 400
     
     order['status'] = 'cancelled'
     order['cancelled_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    write_json(ORDERS_FILE, orders)
+    mock_orders = orders
     
     return jsonify({
         'success': True,
@@ -279,8 +534,12 @@ def cancel_order(order_id):
     })
 
 if __name__ == '__main__':
-    print('=' * 50)
+    print('=' * 60)
     print('デモサイトが起動しました！')
-    print('ブラウザで http://localhost:5000 を開いてください')
-    print('=' * 50)
+    print('')
+    print('フロントエンド: http://localhost:5000')
+    print('管理画面:       http://localhost:5000/admin')
+    print('')
+    print('管理画面ログインパスワード: admin')
+    print('=' * 60)
     app.run(debug=True, host='0.0.0.0', port=5000)

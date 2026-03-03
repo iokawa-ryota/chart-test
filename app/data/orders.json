@@ -1,0 +1,29 @@
+[
+  {
+    "id": 1,
+    "side": "buy",
+    "type": "limit",
+    "pair": "BTC/JPY",
+    "amount": 0.08325,
+    "price": 15000000.0,
+    "total": 1248750.0,
+    "fee": 1248.75,
+    "status": "canceled",
+    "timestamp": "2026-03-03 15:51:26",
+    "filled_at": null,
+    "canceled_at": "2026-03-03 16:21:35"
+  },
+  {
+    "id": 2,
+    "side": "buy",
+    "type": "limit",
+    "pair": "BTC/JPY",
+    "amount": 0.08325,
+    "price": 15000000.0,
+    "total": 1248750.0,
+    "fee": 1248.75,
+    "status": "pending",
+    "timestamp": "2026-03-03 16:21:54",
+    "filled_at": null
+  }
+]

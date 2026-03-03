@@ -370,6 +370,11 @@ function PriceChart({ interval, chartType = "candle" }) {
         options: {
           responsive: true,
           maintainAspectRatio: false,
+          layout: {
+            padding: {
+              bottom: 10,
+            },
+          },
           plugins: {
             legend: { display: false },
             tooltip: {
@@ -389,11 +394,20 @@ function PriceChart({ interval, chartType = "candle" }) {
                       ? "day"
                       : "hour",
               },
-              ticks: { color: "#888" },
+              ticks: {
+                color: "#888",
+                padding: 5,
+                autoSkip: true,
+                maxRotation: 0,
+                minRotation: 0,
+              },
               grid: { color: "#2a2b2e" },
             },
             y: {
-              ticks: { color: "#888" },
+              ticks: {
+                color: "#888",
+                padding: 5,
+              },
               grid: { color: "#2a2b2e" },
             },
           },
@@ -418,6 +432,11 @@ function PriceChart({ interval, chartType = "candle" }) {
         options: {
           responsive: true,
           maintainAspectRatio: false,
+          layout: {
+            padding: {
+              bottom: 10,
+            },
+          },
           plugins: {
             legend: { display: false },
           },
@@ -432,11 +451,20 @@ function PriceChart({ interval, chartType = "candle" }) {
                       ? "day"
                       : "hour",
               },
-              ticks: { color: "#888" },
+              ticks: {
+                color: "#888",
+                padding: 5,
+                autoSkip: true,
+                maxRotation: 0,
+                minRotation: 0,
+              },
               grid: { color: "#2a2b2e" },
             },
             y: {
-              ticks: { color: "#888" },
+              ticks: {
+                color: "#888",
+                padding: 5,
+              },
               grid: { color: "#2a2b2e" },
             },
           },
@@ -751,13 +779,42 @@ function App() {
   const [orders, setOrders] = useState([]);
   const [chartInterval, setChartInterval] = useState("60");
   const [chartType, setChartType] = useState("candle");
+  const [tradeMode, setTradeMode] = useState("spot"); // 'spot' or 'leverage'
+  const [leverageRatio, setLeverageRatio] = useState(10); // 2, 5, 10
+  const [currentBtcPrice, setCurrentBtcPrice] = useState(15000000); // BTC/JPYレート
+  const [currentEthPrice, setCurrentEthPrice] = useState(500000); // ETH/JPYレート（仮）
 
   useEffect(() => {
     fetchBalance();
     fetchDeposits();
     fetchWithdrawals();
     fetchOrders();
+    fetchCurrentPrices();
+
+    // 価格を定期的に更新（30秒ごと）
+    const priceInterval = setInterval(fetchCurrentPrices, 30000);
+    return () => clearInterval(priceInterval);
   }, []);
+
+  const fetchCurrentPrices = async () => {
+    try {
+      // Bybit APIからBTC/USDTの価格を取得
+      const response = await fetch(
+        "https://api.bybit.com/v5/market/tickers?category=spot&symbol=BTCUSDT",
+      );
+      const data = await response.json();
+
+      if (data.retCode === 0 && data.result.list.length > 0) {
+        const btcUsd = parseFloat(data.result.list[0].lastPrice);
+        // USD/JPYレートを150円と仮定
+        const btcJpy = Math.round(btcUsd * 150);
+        setCurrentBtcPrice(btcJpy);
+      }
+    } catch (error) {
+      console.error("Failed to fetch current prices:", error);
+      // エラー時はデフォルト値を維持
+    }
+  };
 
   const fetchBalance = async () => {
     try {
@@ -818,9 +875,38 @@ function App() {
     }
   };
 
-  const btcJpy = (balance.BTC || 0) * 15000000;
-  const ethJpy = (balance.ETH || 0) * 500000;
-  const totalJpy = btcJpy + ethJpy;
+  const btcJpy = (balance.BTC || 0) * currentBtcPrice;
+  const ethJpy = (balance.ETH || 0) * currentEthPrice;
+  const jpyBalance = balance.JPY || 0;
+  const totalJpy = jpyBalance + btcJpy + ethJpy;
+
+  // レバレッジポジションの簡易計算（将来的に実装）
+  const leveragePositions = orders.filter(
+    (order) => order.trade_type === "leverage" && order.status === "filled",
+  );
+
+  // 証拠金維持率の計算（簡易版）
+  const totalMarginUsed = leveragePositions.reduce((sum, order) => {
+    return sum + (order.margin_used || 0);
+  }, 0);
+
+  const marginRatio =
+    totalMarginUsed > 0
+      ? ((totalJpy / totalMarginUsed) * 100).toFixed(2)
+      : null;
+
+  // 約定評価損益の計算（簡易版）
+  const realizedPnL = orders
+    .filter((order) => order.status === "filled")
+    .reduce((sum, order) => {
+      // 簡易的な損益計算（実際は複雑）
+      if (order.side === "buy") {
+        return sum - (order.total || 0) - (order.fee || 0);
+      } else {
+        return sum + (order.total || 0) - (order.fee || 0);
+      }
+    }, 0);
+
   const assetColors = {
     JPY: "#26a69a",
     BTC: "#f7931a",
@@ -877,11 +963,41 @@ function App() {
       <div className="top-header">
         <div className="header-left">
           <div className="header-title">💰 暗号資産取引デモサイト</div>
+          <div className="trade-mode-switcher">
+            <button
+              className={`mode-btn ${tradeMode === "spot" ? "active" : ""}`}
+              onClick={() => setTradeMode("spot")}
+            >
+              現物
+            </button>
+            <button
+              className={`mode-btn ${tradeMode === "leverage" ? "active" : ""}`}
+              onClick={() => setTradeMode("leverage")}
+            >
+              レバレッジ
+            </button>
+          </div>
+          {tradeMode === "leverage" && (
+            <div className="leverage-ratio-display">
+              <span className="leverage-label">倍率:</span>
+              <select
+                className="leverage-select"
+                value={leverageRatio}
+                onChange={(e) => setLeverageRatio(Number(e.target.value))}
+              >
+                <option value={2}>2x</option>
+                <option value={5}>5x</option>
+                <option value={10}>10x</option>
+              </select>
+            </div>
+          )}
         </div>
         <div className="header-info">
           <div className="info-item">
             <span className="info-label">証拠金維持率</span>
-            <span className="info-value positive">96,312.56%</span>
+            <span className={`info-value ${marginRatio ? "positive" : ""}`}>
+              {marginRatio ? `${marginRatio}%` : "N/A"}
+            </span>
           </div>
           <div className="info-item">
             <span className="info-label">純資産額</span>
@@ -891,8 +1007,23 @@ function App() {
           </div>
           <div className="info-item">
             <span className="info-label">約定評価損益</span>
-            <span className="info-value negative">-2,621,640,701 JPY</span>
+            <span
+              className={`info-value ${realizedPnL >= 0 ? "positive" : "negative"}`}
+            >
+              {realizedPnL >= 0 ? "+" : ""}
+              {realizedPnL.toLocaleString("ja-JP")} JPY
+            </span>
           </div>
+        </div>
+        <div className="header-admin-link">
+          <a
+            href="/admin"
+            target="_blank"
+            className="admin-link-btn"
+            title="管理画面を開く"
+          >
+            ⚙️ 管理画面
+          </a>
         </div>
       </div>
 
