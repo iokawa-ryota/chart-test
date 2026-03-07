@@ -15,8 +15,19 @@ if errorlevel 1 (
 )
 
 echo.
-echo 依存パッケージをインストールしています...
-pip install -r requirements.txt
+echo Dockerのインストール確認中...
+docker compose version > nul 2>&1
+if errorlevel 1 (
+    echo エラー: Docker または Docker Compose がインストールされていません。
+    echo Docker Desktopをインストールし、起動してから再度実行してください。
+    echo ダウンロード: https://www.docker.com/products/docker-desktop/
+    pause
+    exit /b 1
+)
+
+echo.
+echo 必要なPythonライブラリをインストールしています...
+pip install -r requirements.txt sqlalchemy psycopg2-binary apscheduler
 
 if errorlevel 1 (
     echo エラー: Flaskのインストールに失敗しました。
