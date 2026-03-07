@@ -25,5 +25,36 @@
     "status": "pending",
     "timestamp": "2026-03-03 16:21:54",
     "filled_at": null
+  },
+  {
+    "id": 3,
+    "side": "buy",
+    "type": "market",
+    "symbol": "BTCUSDT",
+    "pair": "BTC/JPY",
+    "amount": 0.1,
+    "price": 10139055,
+    "total": 1013905.5,
+    "fee": 1013.9055000000001,
+    "status": "filled",
+    "timestamp": "2026-03-08 03:58:58",
+    "filled_at": "2026-03-08 03:58:58"
+  },
+  {
+    "id": 4,
+    "side": "buy",
+    "type": "market",
+    "symbol": "BTCUSDT",
+    "pair": "BTC/JPY",
+    "trade_type": "leverage",
+    "leverage_ratio": 10.0,
+    "amount": 1.0,
+    "price": 10067115,
+    "total": 10067115.0,
+    "fee": 10067.115,
+    "margin_used": 1016778.615,
+    "status": "filled",
+    "timestamp": "2026-03-08 05:02:00",
+    "filled_at": "2026-03-08 05:02:00"
   }
 ]
