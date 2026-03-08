@@ -808,6 +808,7 @@ function OrderHistoryPage({ orders }) {
 function AdminApp() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [currentPage, setCurrentPage] = useState("dashboard");
+  const [loadError, setLoadError] = useState("");
   const [settings, setSettings] = useState(null);
   const [balance, setBalance] = useState(null);
   const [orders, setOrders] = useState([]);
@@ -833,38 +834,62 @@ function AdminApp() {
   const loadData = async () => {
     try {
       const token = localStorage.getItem("adminToken");
+      if (!token) {
+        setIsLoggedIn(false);
+        return;
+      }
+
       const headers = {
         Authorization: `Bearer ${token}`,
       };
 
+      const fetchWithAuth = async (url, options = {}) => {
+        const response = await fetch(url, options);
+        if (response.status === 401) {
+          throw new Error("UNAUTHORIZED");
+        }
+        return response;
+      };
+
       // 設定取得
-      const settingsRes = await fetch("/api/admin/settings", { headers });
+      const settingsRes = await fetchWithAuth("/api/admin/settings", { headers });
       const settingsData = await settingsRes.json();
       if (settingsData.success) {
         setSettings(settingsData.data);
       }
 
       // 残高取得
-      const balanceRes = await fetch("/api/admin/balance", { headers });
+      const balanceRes = await fetchWithAuth("/api/admin/balance", { headers });
       const balanceData = await balanceRes.json();
       if (balanceData.success) {
         setBalance(balanceData.data);
       }
 
       // 注文取得
-      const ordersRes = await fetch("/api/admin/orders", { headers });
+      const ordersRes = await fetchWithAuth("/api/admin/orders", { headers });
       const ordersData = await ordersRes.json();
       if (ordersData.success) {
         setOrders(ordersData.data);
       }
 
       // 統計取得
-      const statsRes = await fetch("/api/admin/stats", { headers });
+      const statsRes = await fetchWithAuth("/api/admin/stats", { headers });
       const statsData = await statsRes.json();
       if (statsData.success) {
         setStats(statsData.data);
       }
+
+      setLoadError("");
     } catch (err) {
+      if (err.message === "UNAUTHORIZED") {
+        localStorage.removeItem("adminToken");
+        setIsLoggedIn(false);
+        setSettings(null);
+        setBalance(null);
+        setLoadError("");
+        return;
+      }
+      setLoadError("管理画面データの読み込みに失敗しました");
       console.error("データ読み込みエラー:", err);
     }
   };
@@ -920,7 +945,11 @@ function AdminApp() {
   }
 
   if (!settings || !balance) {
-    return <div className="loading">読み込み中...</div>;
+    return (
+      <div className="loading">
+        {loadError || "読み込み中..."}
+      </div>
+    );
   }
 
   const renderPage = () => {

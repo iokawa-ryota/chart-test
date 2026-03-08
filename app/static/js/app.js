@@ -4,6 +4,7 @@ const API_BASE = "http://localhost:5000/api";
 const BYBIT_WS = "wss://stream.bybit.com/v5/public/linear";
 const BYBIT_API = "https://api.bybit.com/v5/market";
 const USDJPY_RATE = 150; // 簡易的なUSD/JPY換算レート
+const LOGIN_PATH = "/login";
 
 const SYMBOL_CONFIG = {
   BTCUSDT: {
@@ -258,6 +259,7 @@ function PriceChart({
   interval,
   chartType = "candle",
   selectedSymbol,
+  layoutKey,
   onSymbolChange,
 }) {
   const chartRef = useRef(null);
@@ -556,6 +558,17 @@ function PriceChart({
       }
     };
   }, [klineData, chartType, interval]);
+
+  // Header layout changes (e.g. trade mode toggle) can affect canvas width.
+  useEffect(() => {
+    if (!chartInstance.current) return;
+    const timer = setTimeout(() => {
+      if (chartInstance.current) {
+        chartInstance.current.resize();
+      }
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [layoutKey]);
 
   return (
     <div className="chart-section-full">
@@ -874,7 +887,71 @@ function TradingPanel({ balance, onOrderCreated, selectedSymbol, tradeMode, leve
   );
 }
 
+function FrontLoginPage({ onLogin, loading, error }) {
+  const [username, setUsername] = useState("User1");
+  const [password, setPassword] = useState("User1");
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    await onLogin(username, password);
+  };
+
+  const handleDeveloperLogin = async () => {
+    setUsername("User1");
+    setPassword("User1");
+    await onLogin("User1", "User1");
+  };
+
+  return (
+    <div className="front-login-page">
+      <div className="front-login-card">
+        <h1>暗号資産取引デモサイト</h1>
+        <p className="front-login-subtitle">ユーザーログイン</p>
+        <p className="front-login-hint">テスト用: ID `User1` / PW `User1`</p>
+        {error && <div className="error-message">{error}</div>}
+        <form onSubmit={handleSubmit}>
+          <div className="form-group">
+            <label className="form-label">ID</label>
+            <input
+              className="form-input"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="User1"
+            />
+          </div>
+          <div className="form-group">
+            <label className="form-label">パスワード</label>
+            <input
+              type="password"
+              className="form-input"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="User1"
+            />
+          </div>
+          <button type="submit" className="order-btn buy" disabled={loading}>
+            {loading ? "ログイン中..." : "ログイン"}
+          </button>
+          <button
+            type="button"
+            className="dev-login-btn"
+            disabled={loading}
+            onClick={handleDeveloperLogin}
+          >
+            開発者用ログイン (User1)
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [authChecking, setAuthChecking] = useState(true);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState("");
+  const [currentUser, setCurrentUser] = useState("");
   const [activeMenu, setActiveMenu] = useState("chart");
   const [balance, setBalance] = useState({
     BTC: 1.5,
@@ -901,6 +978,43 @@ function App() {
   });
 
   useEffect(() => {
+    const checkAuth = async () => {
+      const currentPath = window.location.pathname;
+      try {
+        const response = await fetch(`${API_BASE}/auth/me`);
+        if (!response.ok) {
+          setIsAuthenticated(false);
+          if (currentPath !== LOGIN_PATH) {
+            window.location.replace(LOGIN_PATH);
+          }
+          return;
+        }
+
+        const data = await response.json();
+        setCurrentUser(data?.user?.username || "");
+        setIsAuthenticated(true);
+        if (currentPath === LOGIN_PATH) {
+          window.location.replace("/");
+          return;
+        }
+      } catch (error) {
+        setIsAuthenticated(false);
+        if (currentPath !== LOGIN_PATH) {
+          window.location.replace(LOGIN_PATH);
+        }
+      } finally {
+        setAuthChecking(false);
+      }
+    };
+
+    checkAuth();
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      return undefined;
+    }
+
     fetchBalance();
     fetchDeposits();
     fetchWithdrawals();
@@ -910,7 +1024,7 @@ function App() {
     // 価格を定期的に更新（30秒ごと）
     const priceInterval = setInterval(fetchCurrentPrices, 30000);
     return () => clearInterval(priceInterval);
-  }, []);
+  }, [isAuthenticated]);
 
   const fetchCurrentPrices = async () => {
     const nextPrices = { ...assetPrices };
@@ -974,6 +1088,48 @@ function App() {
     } catch (error) {
       console.error("Failed to fetch orders:", error);
     }
+  };
+
+  const handleLogin = async (username, password) => {
+    setAuthError("");
+    setAuthLoading(true);
+
+    try {
+      const response = await fetch(`${API_BASE}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        setAuthError(data.error || "ログインに失敗しました");
+        return;
+      }
+
+      setCurrentUser(data?.user?.username || username);
+      setIsAuthenticated(true);
+      if (window.location.pathname === LOGIN_PATH) {
+        window.location.replace("/");
+      }
+    } catch (error) {
+      setAuthError("ログイン中にエラーが発生しました");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetch(`${API_BASE}/auth/logout`, { method: "POST" });
+    } catch (error) {
+      // Ignore network error and still move user to login UI.
+    }
+
+    setIsAuthenticated(false);
+    setCurrentUser("");
+    setAuthError("");
+    window.location.replace(LOGIN_PATH);
   };
 
   const handleOrderCreated = (order) => {
@@ -1110,6 +1266,20 @@ function App() {
   const selectedSymbolMeta = getSymbolMeta(selectedSymbol);
   const selectedSymbolPrice = assetPrices[selectedSymbolMeta.asset] || 0;
 
+  if (authChecking) {
+    return <div className="loading">ログイン状態を確認中...</div>;
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <FrontLoginPage
+        onLogin={handleLogin}
+        loading={authLoading}
+        error={authError}
+      />
+    );
+  }
+
   return (
     <div className="app-container-new">
       <div className="top-header">
@@ -1129,8 +1299,9 @@ function App() {
               レバレッジ
             </button>
           </div>
-          {tradeMode === "leverage" && (
-            <div className="leverage-ratio-display">
+          <div
+            className={`leverage-ratio-display ${tradeMode === "leverage" ? "active" : "hidden"}`}
+          >
               <span className="leverage-label">倍率:</span>
               <select
                 className="leverage-select"
@@ -1141,8 +1312,7 @@ function App() {
                 <option value={5}>5x</option>
                 <option value={10}>10x</option>
               </select>
-            </div>
-          )}
+          </div>
         </div>
         <div className="header-info">
           <div className="info-item">
@@ -1168,6 +1338,10 @@ function App() {
           </div>
         </div>
         <div className="header-admin-link">
+          <span className="header-user-badge">👤 {currentUser}</span>
+          <button className="logout-btn" onClick={handleLogout}>
+            ログアウト
+          </button>
           <a
             href="/admin"
             target="_blank"
@@ -1227,6 +1401,7 @@ function App() {
                   interval={chartInterval}
                   chartType={chartType}
                   selectedSymbol={selectedSymbol}
+                  layoutKey={tradeMode}
                   onSymbolChange={setSelectedSymbol}
                 />
               </div>
@@ -1247,6 +1422,7 @@ function App() {
                   interval={chartInterval}
                   chartType={chartType}
                   selectedSymbol={selectedSymbol}
+                  layoutKey={tradeMode}
                   onSymbolChange={setSelectedSymbol}
                 />
               </div>

@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory, session
 from flask_cors import CORS
 import time
 import random
@@ -16,6 +16,7 @@ init_db()
 
 app = Flask(__name__, static_folder='static')
 CORS(app)
+app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-secret-change-me')
 
 def create_lambda_handler(flask_app):
     try:
@@ -41,11 +42,121 @@ SYMBOL_ASSET_MAP = {
 
 # 管理者パスワード（SHA256ハッシュ）
 ADMIN_PASSWORD_HASH = hashlib.sha256('admin'.encode()).hexdigest()
+DEFAULT_APP_USER = 'demo'
+DEFAULT_APP_USER_PASSWORD = 'demo123'
+DEFAULT_FRONT_USER = 'User1'
+DEFAULT_FRONT_USER_PASSWORD = 'User1'
+
+
+def hash_password(raw_password):
+    return hashlib.sha256(raw_password.encode()).hexdigest()
+
+
+def get_user_setting_key(username, key_name):
+    return f'user:{username}:{key_name}'
+
+
+def get_user_password_hash(username):
+    with get_db() as db:
+        record = db.query(Setting).filter(Setting.key == get_user_setting_key(username, 'password_hash')).first()
+        return record.value if record else None
+
+
+def upsert_setting(db, key, value):
+    record = db.query(Setting).filter(Setting.key == key).first()
+    if record:
+        record.value = value
+    else:
+        db.add(Setting(key=key, value=value))
+
+
+def ensure_default_app_user():
+    with get_db() as db:
+        defaults = [
+            (DEFAULT_APP_USER, DEFAULT_APP_USER_PASSWORD),
+            (DEFAULT_FRONT_USER, DEFAULT_FRONT_USER_PASSWORD),
+        ]
+        changed = False
+        for username, password in defaults:
+            pwd_key = get_user_setting_key(username, 'password_hash')
+            if not db.query(Setting).filter(Setting.key == pwd_key).first():
+                upsert_setting(db, pwd_key, hash_password(password))
+                changed = True
+        if changed:
+            db.commit()
+
+
+def current_app_username():
+    username = session.get('username')
+    if username:
+        return username
+    # Keep backward compatibility by auto-attaching anonymous usage to demo user.
+    session['username'] = DEFAULT_APP_USER
+    return DEFAULT_APP_USER
+
+
+def scoped_asset_key(username, asset):
+    return asset if username == DEFAULT_APP_USER else f'{username}:{asset}'
+
+
+def ensure_user_balances(username):
+    defaults = {
+        'BTC': 1.5,
+        'ETH': 10.0,
+        'XRP': 0.0,
+        'SOL': 0.0,
+        'USDC': 0.0,
+        'JPY': 5000000.0,
+    }
+    with get_db() as db:
+        for asset, amount in defaults.items():
+            key = scoped_asset_key(username, asset)
+            existing = db.query(Balance).filter(Balance.asset == key).first()
+            if not existing:
+                db.add(Balance(asset=key, amount=amount))
+        db.commit()
+
+
+def get_balance_record(db, username, asset):
+    key = scoped_asset_key(username, asset)
+    record = db.query(Balance).filter(Balance.asset == key).first()
+    if not record:
+        record = Balance(asset=key, amount=0.0)
+        db.add(record)
+        db.flush()
+    return record
+
+
+def scoped_record_id(username, ordinal):
+    return str(ordinal) if username == DEFAULT_APP_USER else f'{username}_{ordinal}'
+
+
+def extract_username_from_scoped_id(record_id):
+    if record_id is None:
+        return DEFAULT_APP_USER
+    record_id_str = str(record_id)
+    if '_' not in record_id_str:
+        return DEFAULT_APP_USER
+    return record_id_str.split('_', 1)[0]
+
+
+def is_record_visible_for_user(record_id, username):
+    owner = extract_username_from_scoped_id(record_id)
+    return owner == username
+
+
+@app.before_request
+def bind_default_user_session():
+    if request.path.startswith('/api/') and not request.path.startswith('/api/admin') and not request.path.startswith('/api/auth'):
+        ensure_default_app_user()
+        current_app_username()
+        ensure_user_balances(session['username'])
 
 # データ読み込み関数群（DBから）
 def load_settings():
     with get_db() as db:
-        records = db.query(Setting).all()
+        # Exclude user-auth scoped keys (e.g. user:alice:password_hash) from app settings.
+        records = db.query(Setting).filter(~Setting.key.like('user:%')).all()
         if not records:
             return {
                 'mock_btc_price': 15000000,
@@ -55,12 +166,25 @@ def load_settings():
                 'price_limit_percent': 10,
                 'maintenance_mode': False
             }
-        return {s.key: json.loads(s.value) for s in records}
+        settings_data = {}
+        for s in records:
+            try:
+                settings_data[s.key] = json.loads(s.value)
+            except Exception:
+                # Keep backward compatibility if legacy/plain values are present.
+                settings_data[s.key] = s.value
+        return settings_data
 
-def load_balance():
+def load_balance(username=None):
+    username = username or current_app_username()
     with get_db() as db:
         records = db.query(Balance).all()
-        balance = {b.asset: b.amount for b in records}
+        balance = {}
+        for b in records:
+            if username == DEFAULT_APP_USER and ':' not in b.asset:
+                balance[b.asset] = b.amount
+            elif b.asset.startswith(f'{username}:'):
+                balance[b.asset.split(':', 1)[1]] = b.amount
         for asset in ['BTC', 'ETH', 'XRP', 'SOL', 'USDC', 'JPY']:
             if asset not in balance:
                 balance[asset] = 0.0
@@ -90,32 +214,40 @@ def fetch_symbol_price_jpy(symbol, settings_data):
 
     return fallback_price
 
-def load_orders():
+def load_orders(username=None, include_all=False):
+    username = username or current_app_username()
     with get_db() as db:
         records = db.query(Order).order_by(Order.timestamp.desc()).all()
-        return [{
+        serialized = [{
             'id': o.id, 'side': o.side, 'type': o.type, 'symbol': o.symbol,
             'pair': o.pair, 'trade_type': o.trade_type, 'leverage_ratio': o.leverage_ratio,
             'amount': o.amount, 'price': o.price, 'execution_price': o.execution_price,
             'total': o.total, 'fee': o.fee, 'margin_used': o.margin_used,
             'status': o.status, 'timestamp': o.timestamp, 'filled_at': o.filled_at
         } for o in records]
+        if include_all:
+            return serialized
+        return [o for o in serialized if is_record_visible_for_user(o['id'], username)]
 
-def load_deposits():
+def load_deposits(username=None):
+    username = username or current_app_username()
     with get_db() as db:
         records = db.query(Transaction).filter(Transaction.type == 'deposit').order_by(Transaction.timestamp.desc()).all()
-        return [{
+        serialized = [{
             'id': t.id, 'date': t.timestamp, 'currency': t.currency, 'amount': t.amount,
             'fee': t.fee, 'status': t.status
         } for t in records]
+        return [t for t in serialized if is_record_visible_for_user(t['id'], username)]
 
-def load_withdrawals():
+def load_withdrawals(username=None):
+    username = username or current_app_username()
     with get_db() as db:
         records = db.query(Transaction).filter(Transaction.type == 'withdraw').order_by(Transaction.timestamp.desc()).all()
-        return [{
+        serialized = [{
             'id': t.id, 'date': t.timestamp, 'currency': t.currency, 'amount': t.amount,
             'address': t.address, 'fee': t.fee, 'status': t.status
         } for t in records]
+        return [t for t in serialized if is_record_visible_for_user(t['id'], username)]
 
 # 管理者認証デコレーター
 def admin_required(f):
@@ -143,6 +275,10 @@ CURRENT_BTC_PRICE = settings.get('mock_btc_price', 15000000)
 # 静的ファイルの配信
 @app.route('/')
 def index():
+    return send_from_directory('static', 'index.html')
+
+@app.route('/login')
+def login_page():
     return send_from_directory('static', 'index.html')
 
 @app.route('/admin')
@@ -235,7 +371,7 @@ def update_admin_balance():
 @app.route('/api/admin/orders', methods=['GET'])
 @admin_required
 def get_admin_orders():
-    orders = load_orders()
+    orders = load_orders(include_all=True)
     return jsonify({'success': True, 'data': orders})
 
 # API: 注文手動約定
@@ -255,13 +391,12 @@ def fill_order(order_id):
             # 約定処理
             order.status = 'filled'
             order.filled_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            username = extract_username_from_scoped_id(order.id)
             
             # 残高更新
-            jpy_balance = db.query(Balance).filter(Balance.asset == 'JPY').first()
-            base_balance = db.query(Balance).filter(Balance.asset == order.symbol.replace('USDT', '')).first()
-            if not base_balance:
-                base_balance = Balance(asset=order.symbol.replace('USDT', ''), amount=0.0)
-                db.add(base_balance)
+            base_asset = order.symbol.replace('USDT', '')
+            jpy_balance = get_balance_record(db, username, 'JPY')
+            base_balance = get_balance_record(db, username, base_asset)
                 
             if order.type == 'buy':
                 jpy_balance.amount -= (order.price * order.amount)
@@ -302,7 +437,7 @@ def admin_cancel_order(order_id):
 @app.route('/api/admin/stats', methods=['GET'])
 @admin_required
 def get_admin_stats():
-    orders = load_orders()
+    orders = load_orders(include_all=True)
     settings = load_settings()
     
     stats = {
@@ -325,25 +460,26 @@ def get_admin_stats():
 @app.route('/api/balance', methods=['GET'])
 def get_balance():
     time.sleep(0.3)  # レスポンス遅延を模擬
-    return jsonify(load_balance())
+    return jsonify(load_balance(current_app_username()))
 
 # API: 入金履歴取得
 @app.route('/api/deposits', methods=['GET'])
 def get_deposits():
     time.sleep(0.3)
-    return jsonify(load_deposits())
+    return jsonify(load_deposits(current_app_username()))
 
 # API: 出金履歴取得
 @app.route('/api/withdrawals', methods=['GET'])
 def get_withdrawals():
     time.sleep(0.3)
-    return jsonify(load_withdrawals())
+    return jsonify(load_withdrawals(current_app_username()))
 
 # API: 出金申請
 @app.route('/api/withdraw', methods=['POST'])
 def withdraw():
     data = request.json
     time.sleep(1)  # 処理中の表現
+    username = current_app_username()
     
     currency = data.get('currency')
     address = data.get('address')
@@ -371,7 +507,7 @@ def withdraw():
     fee = 0.0005 if currency == 'BTC' else 0.005
     
     with get_db() as db:
-        balance_record = db.query(Balance).filter(Balance.asset == currency).first()
+        balance_record = get_balance_record(db, username, currency)
         if not balance_record or amount_float + fee > balance_record.amount:
             return jsonify({'error': '残高が不足しています'}), 400
         
@@ -383,7 +519,10 @@ def withdraw():
         
         try:
             import uuid
-            withdrawal_id = str(uuid.uuid4())[:8]
+            if username == DEFAULT_APP_USER:
+                withdrawal_id = str(uuid.uuid4())[:8]
+            else:
+                withdrawal_id = f'{username}_{str(uuid.uuid4())[:8]}'
             
             new_tx = Transaction(
                 id=withdrawal_id,
@@ -436,6 +575,7 @@ def create_order():
     price = data.get('price')  # 指値の場合のみ
     trade_type = data.get('trade_type', 'spot')
     leverage_ratio = float(data.get('leverage_ratio', 1))
+    username = current_app_username()
 
     symbol_meta = SYMBOL_ASSET_MAP.get(symbol)
     if not symbol_meta:
@@ -486,11 +626,8 @@ def create_order():
         execution_price = market_price
     
     with get_db() as db:
-        jpy_balance = db.query(Balance).filter(Balance.asset == 'JPY').first()
-        base_balance = db.query(Balance).filter(Balance.asset == base_asset).first()
-        if not base_balance:
-            base_balance = Balance(asset=base_asset, amount=0.0)
-            db.add(base_balance)
+        jpy_balance = get_balance_record(db, username, 'JPY')
+        base_balance = get_balance_record(db, username, base_asset)
             
         fee_rate = settings.get('fee_rate', 0.001)
         
@@ -521,8 +658,12 @@ def create_order():
         
         try:
             now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            order_count = db.query(Order).count()
-            order_id = str(order_count + 1)
+            all_ids = [o.id for o in db.query(Order.id).all()]
+            if username == DEFAULT_APP_USER:
+                scoped_count = len([oid for oid in all_ids if '_' not in oid])
+            else:
+                scoped_count = len([oid for oid in all_ids if oid.startswith(f'{username}_')])
+            order_id = scoped_record_id(username, scoped_count + 1)
             
             new_order = Order(
                 id=order_id,
@@ -577,6 +718,7 @@ def create_order():
 @app.route('/api/orders', methods=['GET'])
 def get_orders():
     status = request.args.get('status')  # 'pending', 'filled', 'all'
+    username = current_app_username()
     
     with get_db() as db:
         query = db.query(Order).order_by(Order.timestamp.desc())
@@ -593,19 +735,23 @@ def get_orders():
             'total': o.total, 'fee': o.fee, 'margin_used': o.margin_used,
             'status': o.status, 'timestamp': o.timestamp, 'filled_at': o.filled_at
         } for o in records]
-        
-        return jsonify(filtered_orders)
+
+        return jsonify([o for o in filtered_orders if is_record_visible_for_user(o['id'], username)])
 
 # API: 注文キャンセル
 @app.route('/api/orders/<string:order_id>', methods=['DELETE'])
 def cancel_order(order_id):
     time.sleep(0.3)
+    username = current_app_username()
     
     with get_db() as db:
         order = db.query(Order).filter(Order.id == order_id).first()
         
         if not order:
             return jsonify({'error': '注文が見つかりません'}), 404
+
+        if not is_record_visible_for_user(order.id, username):
+            return jsonify({'error': 'この注文を操作する権限がありません'}), 403
         
         if order.status not in ['open', 'pending']:
             return jsonify({'error': 'この注文はキャンセルできません'}), 400
@@ -642,6 +788,7 @@ def check_limit_orders():
             current_price = prices.get(order.symbol)
             if not current_price:
                 continue
+            username = extract_username_from_scoped_id(order.id)
             
             should_fill = False
             if order.side == 'buy' and current_price <= order.price:
@@ -650,12 +797,9 @@ def check_limit_orders():
                 should_fill = True
                 
             if should_fill:
-                jpy_balance = db.query(Balance).filter(Balance.asset == 'JPY').first()
                 base_asset = order.symbol.replace('USDT', '')
-                base_balance = db.query(Balance).filter(Balance.asset == base_asset).first()
-                if not base_balance:
-                    base_balance = Balance(asset=base_asset, amount=0.0)
-                    db.add(base_balance)
+                jpy_balance = get_balance_record(db, username, 'JPY')
+                base_balance = get_balance_record(db, username, base_asset)
                 
                 required_jpy = order.price * order.amount
                 fee = required_jpy * fee_rate
@@ -691,6 +835,66 @@ def check_limit_orders():
 scheduler = BackgroundScheduler()
 scheduler.add_job(func=check_limit_orders, trigger="interval", seconds=10)
 scheduler.start()
+
+
+# ===== ユーザー認証API =====
+
+@app.route('/api/auth/me', methods=['GET'])
+def auth_me():
+    username = session.get('username')
+    if not username:
+        return jsonify({'success': False, 'error': '未ログインです'}), 401
+    return jsonify({'success': True, 'user': {'username': username}})
+
+
+@app.route('/api/auth/register', methods=['POST'])
+def auth_register():
+    data = request.json or {}
+    username = (data.get('username') or '').strip()
+    password = data.get('password') or ''
+
+    if len(username) < 3:
+        return jsonify({'success': False, 'error': 'ユーザー名は3文字以上で入力してください'}), 400
+    if len(password) < 6:
+        return jsonify({'success': False, 'error': 'パスワードは6文字以上で入力してください'}), 400
+    if ':' in username or '_' in username:
+        return jsonify({'success': False, 'error': 'ユーザー名に使用できない文字が含まれています'}), 400
+
+    with get_db() as db:
+        key = get_user_setting_key(username, 'password_hash')
+        if db.query(Setting).filter(Setting.key == key).first():
+            return jsonify({'success': False, 'error': 'このユーザー名は既に使用されています'}), 409
+
+        upsert_setting(db, key, hash_password(password))
+        db.commit()
+
+    session['username'] = username
+    ensure_user_balances(username)
+    return jsonify({'success': True, 'message': 'ユーザー登録が完了しました', 'user': {'username': username}})
+
+
+@app.route('/api/auth/login', methods=['POST'])
+def auth_login():
+    ensure_default_app_user()
+    data = request.json or {}
+    username = (data.get('username') or '').strip()
+    password = data.get('password') or ''
+
+    stored_hash = get_user_password_hash(username)
+    if not stored_hash or stored_hash != hash_password(password):
+        return jsonify({'success': False, 'error': 'ユーザー名またはパスワードが正しくありません'}), 401
+
+    session['username'] = username
+    ensure_user_balances(username)
+    return jsonify({'success': True, 'message': 'ログインしました', 'user': {'username': username}})
+
+
+@app.route('/api/auth/logout', methods=['POST'])
+def auth_logout():
+    session.pop('username', None)
+    session['username'] = DEFAULT_APP_USER
+    ensure_user_balances(DEFAULT_APP_USER)
+    return jsonify({'success': True, 'message': 'ログアウトしました'})
 
 if __name__ == '__main__':
     print('=' * 60)

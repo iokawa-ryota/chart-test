@@ -85,6 +85,13 @@ body {
   background: #1a1b1e;
   padding: 6px 12px;
   border-radius: 6px;
+  min-width: 120px;
+  justify-content: space-between;
+}
+
+.leverage-ratio-display.hidden {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .leverage-label {
@@ -147,7 +154,32 @@ body {
 .header-admin-link {
   display: flex;
   align-items: center;
+  gap: 8px;
   margin-left: 20px;
+}
+
+.header-user-badge {
+  font-size: 12px;
+  color: #cfd8dc;
+  background: #2a2b2e;
+  border: 1px solid #3a3b3e;
+  padding: 5px 10px;
+  border-radius: 6px;
+}
+
+.logout-btn {
+  background: #2a2b2e;
+  color: #e8e8e8;
+  border: 1px solid #3a3b3e;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.logout-btn:hover {
+  border-color: #4a9eff;
+  color: #4a9eff;
 }
 
 .admin-link-btn {
@@ -169,6 +201,73 @@ body {
   background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.front-login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 20% 20%, #2a2b2e, #0f1012 55%);
+  padding: 20px;
+}
+
+.front-login-card {
+  width: 100%;
+  max-width: 420px;
+  background: #15171a;
+  border: 1px solid #2a2b2e;
+  border-radius: 12px;
+  padding: 24px;
+}
+
+.front-login-card h1 {
+  font-size: 22px;
+  color: #4a9eff;
+  margin-bottom: 8px;
+}
+
+.front-login-subtitle {
+  color: #cfd8dc;
+  margin-bottom: 6px;
+}
+
+.front-login-hint {
+  color: #9aa3aa;
+  font-size: 12px;
+  margin-bottom: 16px;
+}
+
+.front-login-card .order-btn {
+  width: 100%;
+  margin: 8px 0 0;
+}
+
+.dev-login-btn {
+  width: 100%;
+  margin-top: 8px;
+  background: #20242a;
+  color: #cfd8dc;
+  border: 1px solid #3a3f46;
+  border-radius: 8px;
+  padding: 10px 14px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.front-login-card .form-group {
+  margin-bottom: 14px;
+}
+
+.dev-login-btn:hover {
+  border-color: #4a9eff;
+  color: #4a9eff;
+}
+
+.dev-login-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 /* 価格ティッカー */
@@ -479,6 +578,59 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+@media (max-width: 1280px) {
+  .chart-view {
+    grid-template-columns: 1fr 240px;
+  }
+}
+
+@media (max-width: 1024px) {
+  .chart-view {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) 320px;
+  }
+
+  .chart-main {
+    border-right: none;
+    border-bottom: 1px solid #2a2b2e;
+  }
+
+  .chart-sidebar {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    overflow: hidden;
+  }
+
+  .orderbook {
+    border-bottom: none;
+    border-right: 1px solid #2a2b2e;
+  }
+}
+
+@media (max-width: 768px) {
+  .chart-view {
+    grid-template-rows: minmax(0, 1fr) 360px;
+  }
+
+  .chart-sidebar {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr 1fr;
+  }
+
+  .orderbook {
+    border-right: none;
+    border-bottom: 1px solid #2a2b2e;
+  }
+
+  .chart-container {
+    padding: 12px 12px 24px 12px;
+  }
+
+  .price-chart-canvas {
+    width: 100%;
+  }
 }
 
 /* オーダーブック */

@@ -53,9 +53,48 @@ python -m pytest test/ -v
 admin
 ```
 
+### Docker依存の項目
+
+このプロジェクトは PostgreSQL を Docker Compose で起動する前提です。
+そのため、次の項目は Docker に依存します。
+
+- `start.bat` の起動フロー
+  - `docker-compose up -d` で DB コンテナを先に起動します。
+  - ブラウザ初期遷移先は `http://localhost:5000/login` です。
+  - Flask サーバー起動時に `FLASK_SECRET_KEY` を毎回ランダム化し、ログインセッションを初期化して初回接続状態をシミュレートします。
+- バックエンド API 全般
+  - `app/database.py` は既定で PostgreSQL (`postgresql://...`) を参照します。
+  - 残高/注文/入出金/管理画面設定など、DBアクセスを伴う API は DB 未起動だと失敗します。
+- 画面表示と E2E テスト
+  - フロント表示データ（残高、履歴、注文）と管理画面データは API に依存します。
+  - DB が起動していない状態では、関連する UI 確認や `pytest` の一部が失敗します。
+
+Docker が停止している場合は、まず Docker Desktop を起動し、
+プロジェクト直下で `docker compose ps` を実行して DB コンテナ状態を確認してください。
+
 ---
 
 ## 最新ログ（抜粋）
+
+### v2.2.1（2026-03-08, 進行中）
+
+- フロントのログイン導線を `/login` に統一
+  - 未ログイン時は `/login` へ誘導
+  - ログアウト時は `/login` へ遷移
+- フロントログイン画面を追加
+  - テスト用ユーザー `User1 / User1`
+  - 開発者用ワンクリックログインボタンを追加
+- ユーザー認証/セッション管理を追加
+  - `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me` など
+  - ユーザーごとの残高/注文スコープを管理
+- 管理画面の読み込み改善
+  - 無効トークン時に「読み込み中」で止まらずログイン画面へ復帰
+- UI調整
+  - ヘッダー切替時のチャートX軸ずれを抑止
+  - `chart-main` / `chart-sidebar` をレスポンシブ化
+- 起動運用
+  - `start.bat` の初期表示URLを `/login` に変更
+  - `start.bat` 実行ごとに `FLASK_SECRET_KEY` をランダム化し、既存セッションを無効化
 
 ### v2.2.0（2026-03-04）
 
