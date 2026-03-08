@@ -58,6 +58,17 @@ admin
 このプロジェクトは PostgreSQL を Docker Compose で起動する前提です。
 そのため、次の項目は Docker に依存します。
 
+#### Dockerを何に使っているか
+
+- 開発DB（PostgreSQL）の実行基盤
+  - ローカルPCに PostgreSQL を直接インストールせず、Dockerコンテナで統一環境を起動します。
+- 起動手順の標準化
+  - `start.bat` から `docker-compose up -d` を呼び出し、毎回同じ手順で DB を起動します。
+- データ永続化
+  - `docker-compose.yml` のボリューム（`postgres_data`）で、コンテナ再起動後も DB データを保持します。
+- テスト再現性の向上
+  - API/E2E テスト時に、環境差分（ローカルDB設定差）を減らして再現性を上げます。
+
 - `start.bat` の起動フロー
   - `docker-compose up -d` で DB コンテナを先に起動します。
   - ブラウザ初期遷移先は `http://localhost:5000/login` です。
@@ -71,6 +82,10 @@ admin
 
 Docker が停止している場合は、まず Docker Desktop を起動し、
 プロジェクト直下で `docker compose ps` を実行して DB コンテナ状態を確認してください。
+
+補足:
+- Docker を使うのは主に DB（PostgreSQL）です。
+- Flask アプリ本体は `python app\server.py` でホスト側（ローカルPython）実行です。
 
 ---
 
