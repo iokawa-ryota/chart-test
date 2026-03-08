@@ -2,6 +2,10 @@
 
 Playwrightを使用したフロントエンドのE2Eテスト
 
+## まず見る資料
+
+- UI回帰の手動チェック: `test/REGRESSION-UI-CHECKLIST.md`
+
 ## セットアップ
 
 ### 1. Playwrightのインストール

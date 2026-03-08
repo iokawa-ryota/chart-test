@@ -627,15 +627,37 @@ function TradingPanel({ balance, onOrderCreated, selectedSymbol, tradeMode, leve
   const [currentPrice, setCurrentPrice] = useState(null);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [successFading, setSuccessFading] = useState(false);
   const [loading, setLoading] = useState(false);
+  const successTimerRef = useRef(null);
+  const successFadeTimerRef = useRef(null);
   const symbolMeta = getSymbolMeta(selectedSymbol);
 
+  const clearSuccessTimer = () => {
+    if (successTimerRef.current) {
+      clearTimeout(successTimerRef.current);
+      successTimerRef.current = null;
+    }
+    if (successFadeTimerRef.current) {
+      clearTimeout(successFadeTimerRef.current);
+      successFadeTimerRef.current = null;
+    }
+  };
+
   useEffect(() => {
+    clearSuccessTimer();
     setAmount("");
     setPrice("");
     setError("");
     setSuccess("");
+    setSuccessFading(false);
   }, [selectedSymbol]);
+
+  useEffect(() => {
+    return () => {
+      clearSuccessTimer();
+    };
+  }, []);
 
   // 現在価格を取得
   useEffect(() => {
@@ -682,7 +704,9 @@ function TradingPanel({ balance, onOrderCreated, selectedSymbol, tradeMode, leve
   // 注文実行
   const handleSubmitOrder = async () => {
     setError("");
+    clearSuccessTimer();
     setSuccess("");
+    setSuccessFading(false);
     setLoading(true);
 
     try {
@@ -710,6 +734,15 @@ function TradingPanel({ balance, onOrderCreated, selectedSymbol, tradeMode, leve
       }
 
       setSuccess(data.message);
+      successFadeTimerRef.current = setTimeout(() => {
+        setSuccessFading(true);
+        successFadeTimerRef.current = null;
+      }, 4500);
+      successTimerRef.current = setTimeout(() => {
+        setSuccess("");
+        setSuccessFading(false);
+        successTimerRef.current = null;
+      }, 5000);
       setAmount("");
       if (orderType === "market") {
         setPrice("");
@@ -873,7 +906,6 @@ function TradingPanel({ balance, onOrderCreated, selectedSymbol, tradeMode, leve
 
       {/* エラー・成功メッセージ */}
       {error && <div className="error-message">{error}</div>}
-      {success && <div className="success-message">{success}</div>}
 
       {/* 注文ボタン */}
       <button
@@ -883,6 +915,12 @@ function TradingPanel({ balance, onOrderCreated, selectedSymbol, tradeMode, leve
       >
         {loading ? "処理中..." : orderSide === "buy" ? "買い注文" : "売り注文"}
       </button>
+
+      {success && (
+        <div className={`success-message order-success-message ${successFading ? "fade-out" : ""}`}>
+          {success}
+        </div>
+      )}
     </div>
   );
 }
@@ -1133,7 +1171,7 @@ function App() {
   };
 
   const handleOrderCreated = (order) => {
-    setOrders([order, ...orders]);
+    fetchOrders();
     fetchBalance(); // 残高更新
   };
 
@@ -1512,6 +1550,36 @@ function App() {
 function HistoryView({ deposits, withdrawals, orders, onCancelOrder }) {
   const [activeHistoryTab, setActiveHistoryTab] = useState("orders");
 
+  const formatOrderDate = (order) => order.created_at || order.timestamp || "-";
+  const formatOrderPrice = (order) => {
+    const price = Number(order.price ?? order.execution_price ?? 0);
+    return `${price.toLocaleString()} JPY`;
+  };
+  const formatOrderAmount = (order) => {
+    const amount = Number(order.amount ?? 0);
+    return `${amount.toFixed(8)} BTC`;
+  };
+  const formatOrderTotal = (order) => {
+    const totalFromApi = order.total;
+    if (totalFromApi !== undefined && totalFromApi !== null) {
+      return `${Number(totalFromApi).toLocaleString()} JPY`;
+    }
+    const price = Number(order.price ?? order.execution_price ?? 0);
+    const amount = Number(order.amount ?? 0);
+    return `${Math.round(price * amount).toLocaleString()} JPY`;
+  };
+  const isPendingOrder = (status) => status === "open" || status === "pending";
+  const getOrderStatusLabel = (status) => {
+    if (status === "filled") return "約定";
+    if (isPendingOrder(status)) return "未約定";
+    return "キャンセル";
+  };
+  const getOrderStatusClass = (status) => {
+    if (status === "filled") return "success";
+    if (isPendingOrder(status)) return "warning";
+    return "cancelled";
+  };
+
   // サンプルの約定履歴データ
   const executionHistory = [
     {
@@ -1656,7 +1724,7 @@ function HistoryView({ deposits, withdrawals, orders, onCancelOrder }) {
                 <tbody>
                   {orders.map((order) => (
                     <tr key={order.id}>
-                      <td>{order.created_at}</td>
+                      <td>{formatOrderDate(order)}</td>
                       <td>
                         <span className={`trade-type ${order.side}`}>
                           {order.side === "buy" ? "買い" : "売り"}
@@ -1667,28 +1735,16 @@ function HistoryView({ deposits, withdrawals, orders, onCancelOrder }) {
                           {order.type === "market" ? "成行" : "指値"}
                         </span>
                       </td>
-                      <td>{order.price.toLocaleString()} JPY</td>
-                      <td>{order.amount.toFixed(8)} BTC</td>
-                      <td>{order.total.toLocaleString()} JPY</td>
+                      <td>{formatOrderPrice(order)}</td>
+                      <td>{formatOrderAmount(order)}</td>
+                      <td>{formatOrderTotal(order)}</td>
                       <td>
-                        <span
-                          className={`badge ${
-                            order.status === "filled"
-                              ? "success"
-                              : order.status === "open"
-                                ? "warning"
-                                : "cancelled"
-                          }`}
-                        >
-                          {order.status === "filled"
-                            ? "約定"
-                            : order.status === "open"
-                              ? "未約定"
-                              : "キャンセル"}
+                        <span className={`badge ${getOrderStatusClass(order.status)}`}>
+                          {getOrderStatusLabel(order.status)}
                         </span>
                       </td>
                       <td>
-                        {order.status === "open" && (
+                        {isPendingOrder(order.status) && (
                           <button
                             className="cancel-order-btn"
                             onClick={() => onCancelOrder(order.id)}

@@ -997,6 +997,16 @@ body {
   font-size: 13px;
 }
 
+.order-success-message {
+  margin-top: 8px;
+  opacity: 1;
+  transition: opacity 0.5s ease;
+}
+
+.order-success-message.fade-out {
+  opacity: 0;
+}
+
 /* 注文キャンセルボタン */
 .cancel-order-btn {
   padding: 6px 12px;

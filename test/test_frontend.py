@@ -7,8 +7,22 @@
 または
     python -m pytest test/test_frontend.py -v
 """
+import re
 import pytest
 from playwright.sync_api import Page, expect
+
+
+BASE_URL = "http://localhost:5000"
+
+
+def login_as_dev(page: Page):
+    """開発者ログイン(User1)でメイン画面へ遷移する。"""
+    page.goto(f"{BASE_URL}/login")
+    dev_login_button = page.locator(".dev-login-btn")
+    expect(dev_login_button).to_be_visible()
+    dev_login_button.click()
+    expect(page).to_have_url(re.compile(r".*/$"))
+    expect(page.locator(".top-header")).to_be_visible()
 
 
 class TestFrontendDisplay:
@@ -26,7 +40,7 @@ class TestFrontendDisplay:
     def test_page_loads_successfully(self, page: Page):
         """ページが正常に読み込まれるかテスト"""
         # ページにアクセス
-        response = page.goto("http://localhost:5000")
+        response = page.goto(f"{BASE_URL}/login")
         
         # ステータスコードが200であることを確認
         assert response is not None, "レスポンスがNoneです"
@@ -37,7 +51,7 @@ class TestFrontendDisplay:
     
     def test_main_elements_visible(self, page: Page):
         """主要な要素が表示されているかテスト"""
-        page.goto("http://localhost:5000")
+        login_as_dev(page)
         
         # ヘッダーが表示されているか
         header = page.locator(".top-header")
@@ -62,7 +76,7 @@ class TestFrontendDisplay:
     
     def test_balance_display(self, page: Page):
         """残高が表示されているかテスト"""
-        page.goto("http://localhost:5000")
+        login_as_dev(page)
 
         # 資産状況メニューへ移動
         page.locator(".menu-item", has_text="資産状況").click()
@@ -81,7 +95,7 @@ class TestFrontendDisplay:
     
     def test_tab_switching(self, page: Page):
         """タブ切り替えが動作するかテスト"""
-        page.goto("http://localhost:5000")
+        login_as_dev(page)
         
         # 各メニューをクリックして切り替え
         chart_menu = page.locator(".menu-item", has_text="チャート")
@@ -102,7 +116,7 @@ class TestFrontendDisplay:
 
     def test_chart_interval_switch_visible(self, page: Page):
         """時間足ボタン押下時にチャートが表示されるかテスト"""
-        page.goto("http://localhost:5000")
+        login_as_dev(page)
 
         chart_menu = page.locator(".menu-item", has_text="チャート")
         chart_menu.click()
@@ -141,7 +155,7 @@ class TestConsoleErrors:
         page.on("console", handle_console)
         
         # ページを読み込み
-        page.goto("http://localhost:5000")
+        login_as_dev(page)
         
         # Reactアプリがレンダリングされるまで少し待つ
         page.wait_for_selector(".app-container-new", timeout=5000)
@@ -170,7 +184,7 @@ class TestConsoleErrors:
         page.on("response", handle_response)
         
         # ページを読み込み
-        page.goto("http://localhost:5000")
+        login_as_dev(page)
         
         # APIリクエストが完了するまで待つ
         page.wait_for_timeout(2000)
@@ -195,7 +209,7 @@ class TestConsoleErrors:
         page.on("console", handle_console)
         
         # ページを読み込み
-        page.goto("http://localhost:5000")
+        login_as_dev(page)
         
         # チャートメニューをクリック
         chart_tab = page.locator(".menu-item", has_text="チャート")
@@ -221,3 +235,58 @@ class TestConsoleErrors:
                 print(f"  - {error}")
         
         assert len(critical_errors) == 0, f"クリティカルエラーが {len(critical_errors)} 件検出されました"
+
+
+class TestUiRegressions:
+    """最近のUI不具合に対する回帰テスト"""
+
+    def test_market_buy_then_open_history_does_not_crash(self, page: Page):
+        """成行買い直後に履歴へ遷移しても画面が維持されることを確認"""
+        page_errors = []
+        page.on("pageerror", lambda err: page_errors.append(str(err)))
+
+        login_as_dev(page)
+
+        page.locator(".menu-item", has_text="注文パネル").click()
+        amount_input = page.locator('.trading-panel input[placeholder="0.00000000"]')
+        amount_input.fill("0.0001")
+        page.locator(".trading-panel .order-btn.buy").click()
+
+        success_message = page.locator(".trading-panel .order-success-message")
+        expect(success_message).to_be_visible()
+
+        page.locator(".menu-item", has_text="取引履歴").click()
+        expect(page.locator(".history-view")).to_be_visible()
+        expect(page.locator(".history-tabs")).to_be_visible()
+
+        assert len(page_errors) == 0, f"ページエラーが検出されました: {page_errors}"
+
+    def test_order_success_message_under_button_and_fade_out(self, page: Page):
+        """成功メッセージがボタン下に表示され、フェードアウトすることを確認"""
+        login_as_dev(page)
+
+        page.locator(".menu-item", has_text="注文パネル").click()
+        amount_input = page.locator('.trading-panel input[placeholder="0.00000000"]')
+        amount_input.fill("0.0001")
+        page.locator(".trading-panel .order-btn.buy").click()
+
+        success_message = page.locator(".trading-panel .order-success-message")
+        expect(success_message).to_be_visible()
+
+        is_after_buy_button = page.locator(".trading-panel").evaluate(
+            """(panel) => {
+                const button = panel.querySelector('.order-btn.buy');
+                const message = panel.querySelector('.order-success-message');
+                if (!button || !message) return false;
+                return Boolean(
+                  button.compareDocumentPosition(message) & Node.DOCUMENT_POSITION_FOLLOWING
+                );
+            }"""
+        )
+        assert is_after_buy_button, "成功メッセージが買い注文ボタンの後に配置されていません"
+
+        page.wait_for_timeout(4700)
+        expect(success_message).to_have_class(re.compile(r".*fade-out.*"))
+
+        page.wait_for_timeout(700)
+        expect(success_message).to_be_hidden()

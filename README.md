@@ -93,23 +93,12 @@ Docker が停止している場合は、まず Docker Desktop を起動し、
 
 ### v2.2.1（2026-03-08, 進行中）
 
-- フロントのログイン導線を `/login` に統一
-  - 未ログイン時は `/login` へ誘導
-  - ログアウト時は `/login` へ遷移
-- フロントログイン画面を追加
-  - テスト用ユーザー `User1 / User1`
-  - 開発者用ワンクリックログインボタンを追加
-- ユーザー認証/セッション管理を追加
-  - `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me` など
-  - ユーザーごとの残高/注文スコープを管理
-- 管理画面の読み込み改善
-  - 無効トークン時に「読み込み中」で止まらずログイン画面へ復帰
-- UI調整
-  - ヘッダー切替時のチャートX軸ずれを抑止
-  - `chart-main` / `chart-sidebar` をレスポンシブ化
-- 起動運用
-  - `start.bat` の初期表示URLを `/login` に変更
-  - `start.bat` 実行ごとに `FLASK_SECRET_KEY` をランダム化し、既存セッションを無効化
+- 認証導線を `/login` に統一（フロントログインUI追加、未ログイン誘導、ログアウト遷移）
+- ユーザー認証/セッションAPIを追加（`/api/auth/*`）し、ユーザー別データスコープを導入
+- 管理画面の401復帰と、チャート/レイアウト関連のUI安定化を実施
+- 注文後の履歴表示クラッシュ対策と、回帰確認手順・Playwright回帰ケースを追加
+
+実装の詳細は `app/DEV-README.md` の「直近の仕様変更（2026-03-08）」を参照してください。
 
 ### v2.2.0（2026-03-04）
 
@@ -170,6 +159,9 @@ Docker が停止している場合は、まず Docker Desktop を起動し、
 
 - アプリ詳細: [app/DEV-README.md](app/DEV-README.md)
 - 変更履歴: [CHANGELOG.md](CHANGELOG.md)
+- 回帰テスト手順:
+  - [test/README.md](test/README.md)
+  - [test/REGRESSION-UI-CHECKLIST.md](test/REGRESSION-UI-CHECKLIST.md)
 - テスト資料:
   - [01_factor-level.md](01_factor-level.md)
   - [02_pattern-table.md](02_pattern-table.md)
